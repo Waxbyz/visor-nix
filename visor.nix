@@ -171,7 +171,7 @@ let
   configFile = pkgs.writeText "visor-install-config.json" (builtins.toJSON builderConfig);
 
   visorInstaller = pkgs.writeShellScript "visor-install-wrapper" ''
-    exec ${pkgs.python3}/bin/python3 ${./Installer/visor-install.py} ${configFile} "$@"
+    exec ${pkgs.python3}/bin/python3 ${./installer/visor-install.py} ${configFile} "$@"
   '';
 in
 {
