@@ -1,3 +1,4 @@
+{ visor-src, efifs-src }:
 { config, lib, pkgs, ... }:
 
 let
@@ -10,16 +11,10 @@ let
   driverFile = fs: if builtins.elem fs [ "ext3" "ext4" ] then "ext2" else fs;
   efifsNames = lib.unique (map driverFile cfg.drivers);
 
-  visorPackage = pkgs.stdenv.mkDerivation rec {
+  visorPackage = pkgs.stdenv.mkDerivation {
     pname = "visor-bootmanager";
-    version = "1.6.1";
-
-    src = pkgs.fetchFromGitHub {
-      owner = "IO-ZetZor";
-      repo = "Visor-BootManager";
-      rev = "v${version}";
-      hash = lib.fakeHash;
-    };
+    version = visor-src.shortRev or "git";
+    src = visor-src;
 
     nativeBuildInputs = [ pkgs.python3 pkgs.python3Packages.pillow ];
     buildInputs = [ pkgs.gnu-efi ];
@@ -60,17 +55,10 @@ let
     };
   };
 
-  efifsPackage = pkgs.stdenv.mkDerivation rec {
+  efifsPackage = pkgs.stdenv.mkDerivation {
     pname = "efifs-drivers";
-    version = "1.13";
-
-    src = pkgs.fetchFromGitHub {
-      owner = "pbatard";
-      repo = "EfiFs";
-      rev = "v${version}";
-      fetchSubmodules = true;
-      hash = lib.fakeHash;
-    };
+    version = efifs-src.shortRev or "git";
+    src = efifs-src;
 
     nativeBuildInputs = [ pkgs.git pkgs.python3 ];
     hardeningDisable = [ "all" ];
@@ -183,7 +171,7 @@ let
   configFile = pkgs.writeText "visor-install-config.json" (builtins.toJSON builderConfig);
 
   visorInstaller = pkgs.writeShellScript "visor-install-wrapper" ''
-    exec ${pkgs.python3}/bin/python3 ${./visor-install.py} ${configFile} "$@"
+    exec ${pkgs.python3}/bin/python3 ${./Installer/visor-install.py} ${configFile} "$@"
   '';
 in
 {
