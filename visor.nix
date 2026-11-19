@@ -643,7 +643,6 @@ in
 
     system.build.installBootLoader = visorInstaller;
     system.boot.loader.id = "visor";
-    system.boot.loader.kernelFile = pkgs.stdenv.hostPlatform.linux-kernel.target;
 
     systemd.services.visor-time-sync = lib.mkIf cfg.clockSync.enable {
       description = "Sync Visor BootManager clock offset to ESP";
