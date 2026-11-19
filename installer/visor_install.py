@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -153,6 +154,14 @@ def atomic_copy(src, dst: Path, compare: str = "content") -> bool:
     return True
 
 
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def sanitize_ext(ext, default: str = "png") -> str:
     ext = (ext or "").lower()
     return ext if re.fullmatch(r"[a-z0-9]{1,5}", ext) else default
@@ -160,6 +169,42 @@ def sanitize_ext(ext, default: str = "png") -> str:
 
 def efi_path(*parts: str) -> str:
     return "\\" + "\\".join(parts)
+
+
+def apply_entry_opts(attrs: dict, opts: dict, kernel_path: Path | None = None) -> None:
+    mapping = [
+        ("iconSize", "icon_size"),
+        ("color", "color"),
+        ("uuid", "uuid"),
+        ("sha256", "sha256"),
+        ("luksKeyPath", "luks_key_path"),
+        ("luksPreset", "luks_preset"),
+        ("luksCmdline", "luks_cmdline"),
+    ]
+    for src_key, dst_key in mapping:
+        val = opts.get(src_key)
+        if val is not None:
+            attrs[dst_key] = val
+
+    for src_key, dst_key in [
+        ("encrypted", "encrypted"),
+        ("luks", "luks"),
+        ("luksConfirm", "luks_confirm"),
+        ("luksVerbose", "luks_verbose"),
+    ]:
+        if opts.get(src_key):
+            attrs[dst_key] = True
+
+    for src_key, dst_key in [
+        ("kernelEncrypted", "kernel_encrypted"),
+        ("initrdEncrypted", "initrd_encrypted"),
+    ]:
+        val = opts.get(src_key)
+        if val is not None:
+            attrs[dst_key] = val
+
+    if opts.get("pinSha256") and kernel_path is not None and kernel_path.exists():
+        attrs["sha256"] = file_sha256(kernel_path)
 
 
 def spec_from_bootspec(bs: dict) -> dict:
@@ -262,7 +307,7 @@ class Installer:
         d = self.visor_dir
         ov: dict[str, str] = {}
 
-        def media(key: str, subdir: str, stem: str, conf_key: str):
+        def media(key: str, subdir: str, stem: str, conf_key: str, relative_to_visor: bool = False):
             m = a.get(key)
             if not m or not m.get("src"):
                 return
@@ -272,13 +317,18 @@ class Installer:
             except OSError as e:
                 warn(f"{key}: {e}")
                 return
-            ov[conf_key] = efi_path("EFI", "visor", *([subdir] if subdir else []), name)
+            if relative_to_visor:
+                ov[conf_key] = f"{subdir}/{name}" if subdir else name
+            else:
+                ov[conf_key] = efi_path("EFI", "visor", *([subdir] if subdir else []), name)
 
         media("wallpaper", "backgrounds", "custom", "background")
         if "background" not in ov and (d / "backgrounds" / "default.png").exists():
             ov["background"] = efi_path("EFI", "visor", "backgrounds", "default.png")
+        media("splashImage", "backgrounds", "splash", "splash_image")
         media("logo", "", "custom_logo", "logo")
         media("introMedia", "backgrounds", "intro", "intro_media")
+        media("cursor", "cursors", "custom", "cursor", relative_to_visor=True)
 
         sound = a.get("menuSound")
         if sound:
@@ -351,11 +401,12 @@ class Installer:
             top = p.parent.name
         return re.sub(r"[^a-zA-Z0-9._-]", "_", top)
 
-    def install_kernel(self, src: Path) -> str:
+    def install_kernel(self, src: Path) -> tuple[str, Path]:
         name = f"{self._base_name(src)}-{src.name}.efi"
         self.keep.add(name)
-        atomic_copy(src, self.nixos_dir / name, compare="size")
-        return efi_path("EFI", "nixos", name)
+        dst = self.nixos_dir / name
+        atomic_copy(src, dst, compare="size")
+        return efi_path("EFI", "nixos", name), dst
 
     def install_initrd(self, src: Path, secrets: str | None) -> str:
         if not secrets:
@@ -364,7 +415,7 @@ class Installer:
             atomic_copy(src, self.nixos_dir / name, compare="size")
             return efi_path("EFI", "nixos", name)
 
-        sec_tag = self._base_name(Path(secrets))[:16]
+        sec_tag = hashlib.sha256(secrets.encode("utf-8")).hexdigest()[:12]
         name = f"{self._base_name(src)}-{sec_tag}-{src.name}.img"
         self.keep.add(name)
         dst = self.nixos_dir / name
@@ -383,7 +434,7 @@ class Installer:
         return efi_path("EFI", "nixos", name)
 
     def make_entry(self, gen: dict, spec_name, spec: dict):
-        kernel = self.install_kernel(spec["kernel"])
+        kernel, kernel_dst = self.install_kernel(spec["kernel"])
         initrd = self.install_initrd(spec["initrd"], spec["secrets"]) if spec["initrd"] else None
 
         date = time.strftime("%Y-%m-%d", time.localtime(gen["mtime"]))
@@ -406,6 +457,8 @@ class Installer:
         if initrd:
             attrs["initrd"] = initrd
         attrs["cmdline"] = " ".join([f"init={spec['init']}", *spec["params"]])
+
+        apply_entry_opts(attrs, self.cfg.get("nixosEntry") or {}, kernel_path=kernel_dst)
         return attrs, f"{spec['label']} ({date})"
 
     def build_entries(self) -> list[tuple[dict, str]]:
@@ -437,7 +490,7 @@ class Installer:
         c = self.cfg
         lines = [
             f"timeout={c['timeout']}",
-            "default=0",
+            f"default={c.get('defaultEntry', 0)}",
         ]
         lines += render_kv(overrides)
         lines += render_kv(c.get("settings") or {})
@@ -448,12 +501,27 @@ class Installer:
             lines += render_entry(attrs, comment)
             lines.append("")
 
+        for extra in (c.get("extraEntries") or []):
+            ea: dict = {"name": extra["name"]}
+            if extra.get("icon"):
+                ea["icon"] = extra["icon"]
+            ea["kernel"] = extra["kernel"]
+            if extra.get("initrd"):
+                ea["initrd"] = extra["initrd"]
+            if extra.get("cmdline"):
+                ea["cmdline"] = extra["cmdline"]
+            apply_entry_opts(ea, extra)
+            lines += render_entry(ea)
+            lines.append("")
+
         win = self.esp / "EFI" / "Microsoft" / "Boot" / "bootmgfw.efi"
         if c.get("windowsChainload") and win.exists():
-            w = {"name": "Windows 11"}
+            win_opts = c.get("windowsEntry") or {}
+            w: dict = {"name": win_opts.get("name", "Windows 11")}
             if (self.visor_dir / "icons" / "windows.png").exists():
                 w["icon"] = efi_path("EFI", "visor", "icons", "windows.png")
             w["kernel"] = efi_path("EFI", "Microsoft", "Boot", "bootmgfw.efi")
+            apply_entry_opts(w, win_opts, kernel_path=win)
             lines += render_entry(w)
             lines.append("")
         return "\n".join(lines)

@@ -37,10 +37,11 @@ let
     installPhase = ''
       runHook preInstall
 
-      mkdir -p $out/lib/visor $out/bin $out/share/visor/assets
+      mkdir -p $out/lib/visor $out/bin $out/share/visor/assets $out/share/visor/tools
       cp visor_${efiArch}.efi $out/lib/visor/
 
       [ -d assets ] && cp -r assets/* $out/share/visor/assets/
+      [ -d tools ] && cp -r tools/* $out/share/visor/tools/
       [ -f boot.conf.example ] && cp boot.conf.example $out/share/visor/
       [ -f visor ] && install -Dm755 visor $out/bin/visor
 
@@ -127,15 +128,24 @@ let
     || lib.isDerivation v
     || (lib.isString v && lib.hasPrefix "/" v && !(lib.hasInfix "\n" v));
 
-  effectiveSettings = {
-    editor = false;
-    show_names = true;
-    center_info = true;
-    accent = true;
-    blur = "clear";
-    clock = true;
-    clock_format = "24h";
-  } // cfg.settings;
+  effectiveSettings =
+    {
+      editor = false;
+      show_names = true;
+      center_info = true;
+      accent = true;
+      blur = "clear";
+      clock = true;
+      clock_format = "24h";
+    }
+    // lib.optionalAttrs cfg.clockSync.enable { clock_sync = true; }
+    // cfg.settings;
+
+  extraFilesMap =
+    lib.mapAttrs (_: p: "${p}") cfg.extraFiles
+    // lib.optionalAttrs (cfg.snapshotsFile != null) {
+      "snapshots.conf" = "${cfg.snapshotsFile}";
+    };
 
   builderConfig = {
     esp = config.boot.loader.efi.efiSysMountPoint;
@@ -143,9 +153,13 @@ let
     inherit efiArch;
     configurationLimit = cfg.configurationLimit;
     timeout = if config.boot.loader.timeout == null then -1 else config.boot.loader.timeout;
+    defaultEntry = cfg.defaultEntry;
     windowsChainload = cfg.windowsChainload;
     touchEfiVars = config.boot.loader.efi.canTouchEfiVariables;
     entryName = cfg.entryName;
+    nixosEntry = cfg.nixosEntry;
+    windowsEntry = cfg.windowsEntry;
+    extraEntries = cfg.extraEntries;
     settings = effectiveSettings;
     extraConfig = cfg.extraConfig;
     efibootmgr = "${pkgs.efibootmgr}/bin/efibootmgr";
@@ -153,8 +167,10 @@ let
 
     assets = {
       wallpaper = optionalMedia cfg.wallpaper;
+      splashImage = optionalMedia cfg.splashImage;
       logo = optionalMedia cfg.logo;
       introMedia = optionalMedia cfg.introMedia;
+      cursor = optionalMedia cfg.cursor;
       menuSound = if cfg.menuSound != null then "${cfg.menuSound}" else null;
       icons = lib.mapAttrs (_: p: "${p}") cfg.icons;
       themes = lib.mapAttrs
@@ -164,7 +180,7 @@ let
         cfg.themes;
       activeTheme = cfg.theme;
       drivers = resolvedDrivers;
-      extraFiles = lib.mapAttrs (_: p: "${p}") cfg.extraFiles;
+      extraFiles = extraFilesMap;
     };
   };
 
@@ -173,6 +189,127 @@ let
   visorInstaller = pkgs.writeShellScript "visor-install-wrapper" ''
     exec ${pkgs.python3}/bin/python3 ${./installer/visor-install.py} ${configFile} "$@"
   '';
+
+  timeSyncScript = pkgs.writeShellScript "visor-time-sync" ''
+    set -euo pipefail
+    esp=${lib.escapeShellArg config.boot.loader.efi.efiSysMountPoint}
+    target="$esp/EFI/visor/time.sync"
+    ${lib.optionalString cfg.clockSync.syncRtc ''
+      ${pkgs.util-linux}/bin/hwclock --systohc || true
+    ''}
+    ${pkgs.python3}/bin/python3 - "$target" <<'PY'
+    import os, sys, time
+    from pathlib import Path
+
+    target = Path(sys.argv[1])
+    rtc_epoch_file = Path("/sys/class/rtc/rtc0/since_epoch")
+    if not rtc_epoch_file.exists():
+        sys.exit(0)
+
+    rtc_epoch = int(rtc_epoch_file.read_text(encoding="utf-8").strip())
+    offset = int(round(time.time() - rtc_epoch))
+    if abs(offset) >= 86400:
+        sys.exit(0)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(f"offset={offset}\n", encoding="utf-8")
+    os.replace(tmp, target)
+    PY
+  '';
+
+  extraEntryType = lib.types.submodule {
+    options = {
+      name = lib.mkOption {
+        type = lib.types.str;
+        description = "Display name of the boot entry.";
+      };
+      kernel = lib.mkOption {
+        type = lib.types.str;
+        description = "Path to kernel, UKI, or EFI executable relative to filesystem root (e.g. `\\vmlinuz-linux`).";
+      };
+      initrd = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional initrd path relative to filesystem root.";
+      };
+      cmdline = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional kernel command line.";
+      };
+      icon = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional icon path (e.g. `\\EFI\\visor\\icons\\arch.png`).";
+      };
+      iconSize = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        description = "Optional per-entry icon size in pixels.";
+      };
+      color = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional per-entry name color (`#RRGGBB`).";
+      };
+      uuid = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional partition PARTUUID pinning where the kernel or image lives.";
+      };
+      sha256 = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Optional 64-character SHA-256 hash pinning the boot image.";
+      };
+      encrypted = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Set true if both kernel and initrd are Visor encrypted containers (`.venc`).";
+      };
+      kernelEncrypted = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = "Override encryption flag for kernel only.";
+      };
+      initrdEncrypted = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = "Override encryption flag for initrd only.";
+      };
+      luks = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Prompt for a LUKS passphrase and inject it as an initrd keyfile.";
+      };
+      luksKeyPath = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Path of the injected keyfile inside initramfs (e.g. `/crypto_keyfile.bin`).";
+      };
+      luksPreset = lib.mkOption {
+        type = lib.types.nullOr (lib.types.enum [ "mkinitcpio" "arch" "dracut" "systemd" ]);
+        default = null;
+        description = "Initramfs preset for auto-generating the LUKS keyfile kernel option.";
+      };
+      luksCmdline = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Manual kernel command-line option for the LUKS keyfile (overrides `luksPreset`).";
+      };
+      luksConfirm = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Ask for the LUKS passphrase twice to prevent typos.";
+      };
+      luksVerbose = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Strip `quiet` and `splash` from cmdline so initramfs retry prompts remain visible.";
+      };
+    };
+  };
 in
 {
   options.boot.loader.visor = {
@@ -190,6 +327,12 @@ in
       description = "Maximum number of NixOS generations to include in the boot menu.";
     };
 
+    defaultEntry = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 0;
+      description = "0-based index of the default boot entry.";
+    };
+
     entryName = lib.mkOption {
       type = lib.types.str;
       default = "NixOS #{gen}";
@@ -200,6 +343,116 @@ in
       type = lib.types.bool;
       default = true;
       description = "Automatically add a Windows Boot Manager entry if found on the ESP.";
+    };
+
+    nixosEntry = lib.mkOption {
+      description = "Optional per-entry attributes applied to generated NixOS boot entries.";
+      default = { };
+      type = lib.types.submodule {
+        options = {
+          iconSize = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = "Override icon size in pixels for NixOS entries.";
+          };
+          color = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Override entry name color (`#RRGGBB`) for NixOS entries.";
+          };
+          uuid = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional partition PARTUUID pinning the ESP containing NixOS kernels.";
+          };
+          pinSha256 = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Automatically compute and pin the SHA-256 hash of each deployed NixOS kernel.";
+          };
+          luks = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Prompt for a LUKS passphrase and inject it as an initrd keyfile.";
+          };
+          luksKeyPath = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Path of the injected keyfile inside initramfs.";
+          };
+          luksPreset = lib.mkOption {
+            type = lib.types.nullOr (lib.types.enum [ "mkinitcpio" "arch" "dracut" "systemd" ]);
+            default = null;
+            description = "Initramfs preset for auto-generating the LUKS keyfile kernel option.";
+          };
+          luksCmdline = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Manual kernel command-line option for the LUKS keyfile.";
+          };
+          luksConfirm = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Ask for the LUKS passphrase twice to prevent typos.";
+          };
+          luksVerbose = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Strip `quiet` and `splash` from cmdline so initramfs retry prompts remain visible.";
+          };
+        };
+      };
+    };
+
+    windowsEntry = lib.mkOption {
+      description = "Customization options for the auto-detected Windows Boot Manager entry.";
+      default = { };
+      type = lib.types.submodule {
+        options = {
+          name = lib.mkOption {
+            type = lib.types.str;
+            default = "Windows 11";
+            description = "Display name for the Windows Boot Manager entry.";
+          };
+          iconSize = lib.mkOption {
+            type = lib.types.nullOr lib.types.ints.positive;
+            default = null;
+            description = "Override icon size in pixels for the Windows entry.";
+          };
+          color = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Override entry name color (`#RRGGBB`) for the Windows entry.";
+          };
+          uuid = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Optional partition PARTUUID pinning `bootmgfw.efi`.";
+          };
+          pinSha256 = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Compute and pin the SHA-256 hash of `bootmgfw.efi` (forces chainloading).";
+          };
+        };
+      };
+    };
+
+    extraEntries = lib.mkOption {
+      type = lib.types.listOf extraEntryType;
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          {
+            name = "Arch Linux";
+            kernel = "\\vmlinuz-linux";
+            initrd = "\\initramfs-linux.img";
+            cmdline = "root=PARTUUID=... rw quiet";
+            color = "#1793D1";
+          }
+        ]
+      '';
+      description = "Additional custom `entry { ... }` blocks appended after NixOS generations.";
     };
 
     drivers = lib.mkOption {
@@ -251,6 +504,13 @@ in
       description = "Background image or video (PNG, BMP, GIF, MJPEG MP4, VBG) copied to `\\EFI\\visor\\backgrounds\\custom.<ext>`.";
     };
 
+    splashImage = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = lib.literalExpression "./assets/splash.png";
+      description = "Still splash frame image copied to `\\EFI\\visor\\backgrounds\\splash.<ext>` (`splash_image`).";
+    };
+
     logo = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
@@ -263,6 +523,13 @@ in
       default = null;
       example = lib.literalExpression "./assets/intro.gif";
       description = "Boot intro media (PNG, BMP, GIF, MJPEG MP4, VBG) copied to `\\EFI\\visor\\backgrounds\\intro.<ext>`.";
+    };
+
+    cursor = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = lib.literalExpression "./assets/breeze.png";
+      description = "Custom pointer cursor image (PNG or BMP) copied to `\\EFI\\visor\\cursors\\custom.<ext>`.";
     };
 
     menuSound = lib.mkOption {
@@ -312,11 +579,26 @@ in
       description = "Active theme name (or `random` / `cycle`).";
     };
 
+    snapshotsFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Optional manifest file copied to `\\EFI\\visor\\snapshots.conf`.";
+    };
+
     extraFiles = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
       example = lib.literalExpression ''{ "cursors/breeze.png" = ./assets/breeze.png; }'';
       description = "Additional files copied to relative paths under `\\EFI\\visor\\`.";
+    };
+
+    clockSync = {
+      enable = lib.mkEnableOption "periodic systemd service writing `\\EFI\\visor\\time.sync` and enabling `clock_sync=1`";
+      syncRtc = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Also synchronize the hardware RTC (`hwclock --systohc`) during time sync.";
+      };
     };
 
     settings = lib.mkOption {
@@ -353,5 +635,24 @@ in
     system.build.installBootLoader = visorInstaller;
     system.boot.loader.id = "visor";
     system.boot.loader.kernelFile = pkgs.stdenv.hostPlatform.linux-kernel.target;
+
+    systemd.services.visor-time-sync = lib.mkIf cfg.clockSync.enable {
+      description = "Sync Visor BootManager clock offset to ESP";
+      after = [ "time-sync.target" "local-fs.target" ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${timeSyncScript}";
+      };
+    };
+
+    systemd.timers.visor-time-sync = lib.mkIf cfg.clockSync.enable {
+      description = "Periodic Visor BootManager clock offset sync";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2m";
+        OnUnitActiveSec = "6h";
+      };
+    };
   };
 }

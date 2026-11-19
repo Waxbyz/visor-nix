@@ -1,13 +1,10 @@
-{ config, pkgs, ... }:
+{ inputs, pkgs, ... }:
 
 {
-  # Import the module directly, or use inputs.visor-nixos.nixosModules.default in a flake
-  imports = [ ../visor.nix ];
+  imports = [ inputs.visor-nixos.nixosModules.default ];
 
-  # Disable other bootloaders before enabling Visor
-  boot.loader.systemd-boot.enable = false;
-  boot.loader.grub.enable = false;
   boot.loader.efi.canTouchEfiVariables = true;
+  boot.loader.efi.efiSysMountPoint = "/boot";
   boot.loader.timeout = 5;
 
   boot.loader.visor = {
@@ -16,52 +13,56 @@
     entryName = "NixOS #{gen} ({date})";
     windowsChainload = true;
 
-    # Optional: build EfiFs drivers for Visor's file browser or Btrfs snapshot auto-detection
-    # drivers = [ "btrfs" "ext4" ];
+    # Optional: EfiFs drivers for Btrfs snapshots / file browser
+    drivers = [ "btrfs" "ext4" ];
 
-    # Optional: declarative media assets (paths are copied to the Nix store automatically)
+    # Optional: media & theming
     # wallpaper = ./assets/wallpaper.png;
+    # splashImage = ./assets/splash.png;
     # logo = ./assets/logo.png;
     # introMedia = ./assets/intro.gif;
+    # cursor = ./assets/breeze.png;
     # menuSound = ./assets/startup.wav;
+    # theme = "catppuccin";
 
-    # Optional: custom PNG icons -> \EFI\visor\icons\<name>.png
-    # icons = {
-    #   nixos = ./assets/icons/nixos.png;
-    #   windows = ./assets/icons/windows11.png;
-    #   power_shutdown = ./assets/icons/shutdown.png;
-    #   power_reboot = ./assets/icons/reboot.png;
-    #   power_firmware = ./assets/icons/uefi.png;
-    # };
+    # Optional: sync firmware RTC drift via systemd timer
+    clockSync.enable = true;
 
-    # Declarative themes -> \EFI\visor\themes\<name>.conf
-    themes = {
-      tokyo-night = ''
-        title_color=#7AA2F7
-        name_color=#C0CAF5
-        highlight_color=#7AA2F7
-        bg_color=#1A1B26
-        blur=clear
-        blur_title=1
-        box_radius=14
-      '';
+    # Optional: per-entry LUKS / styling / SHA-256 pinning for NixOS generations
+    nixosEntry = {
+      color = "#7AA2F7";
+      # pinSha256 = true;
+      # luks = true;
+      # luksPreset = "systemd";
+      # luksConfirm = true;
     };
-    theme = "tokyo-night";
 
-    # Typed global boot.conf settings (booleans convert to 1/0)
+    # Optional: customize Windows entry
+    windowsEntry = {
+      name = "Windows 11";
+      # color = "#00A4EF";
+    };
+
+    # Optional: custom boot entries (other distros, UKIs, Memtest, etc.)
+    # extraEntries = [
+    #   {
+    #     name = "Memtest86+";
+    #     kernel = "\\EFI\\tools\\memtest86+.efi";
+    #   }
+    # ];
+
     settings = {
-      resolution = "1920x1080";
-      show_names = true;
-      center_info = true;
+      resolution = "native";
+      entries_per_page = 4;
+      blur = "clear";
       accent = true;
+      accent_variant = "tonal";
       clock = true;
       clock_format = "24h";
-      editor = false;
+      clock_date = "iso";
+      screensaver = 60;
+      tpm = true;
+      loader_vars = true;
     };
-
-    # Extra raw lines appended to boot.conf
-    extraConfig = ''
-      windows_bootnext=1
-    '';
   };
 }
