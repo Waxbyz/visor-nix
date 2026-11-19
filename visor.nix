@@ -637,7 +637,6 @@ in
       }
     ];
 
-    boot.bootspec.enable = lib.mkDefault true;
     boot.loader.supportsInitrdSecrets = true;
 
     environment.systemPackages = [ cfg.package pkgs.efibootmgr ];
