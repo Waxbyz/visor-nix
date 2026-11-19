@@ -66,9 +66,12 @@ let
     nativeBuildInputs = [
       pkgs.git
       pkgs.python3
+      pkgs.which
       pkgs.bison
       pkgs.flex
       pkgs.gettext
+    ] ++ lib.optionals (efiArch == "x64") [
+      pkgs.pkgsCross.mingwW64.stdenv.cc
     ];
     buildInputs = [ pkgs.gnu-efi ];
     hardeningDisable = [ "all" ];
@@ -84,7 +87,7 @@ let
       runHook preBuild
       ./set_grub_cpu.sh ${efiArch}
       for fs in ${lib.concatStringsSep " " efifsNames}; do
-        make ARCH=${efiArch} DRIVER="$fs" -j$NIX_BUILD_CORES \
+        make ARCH=${efiArch} "$fs" \
           || make ARCH=${efiArch} -C src "$fs"
       done
       runHook postBuild
@@ -196,7 +199,7 @@ let
   configFile = pkgs.writeText "visor-install-config.json" (builtins.toJSON builderConfig);
 
   visorInstaller = pkgs.writeShellScript "visor-install-wrapper" ''
-    exec ${pkgs.python3}/bin/python3 ${./installer/visor_install.py} ${configFile} "$@"
+    exec ${pkgs.python3}/bin/python3 ${./installer/visor-install.py} ${configFile} "$@"
   '';
 
   timeSyncScript = pkgs.writeShellScript "visor-time-sync" ''
@@ -637,6 +640,7 @@ in
       }
     ];
 
+    boot.bootspec.enable = lib.mkDefault true;
     boot.loader.supportsInitrdSecrets = true;
 
     environment.systemPackages = [ cfg.package pkgs.efibootmgr ];
