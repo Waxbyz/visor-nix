@@ -21,13 +21,17 @@ SPECIALISATION = "org.nixos.specialisation.v1"
 MAIN_GEN_RE = re.compile(r"^system-(\d+)-link$")
 PROFILE_GEN_RE = re.compile(r"^(.+)-(\d+)-link$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}(?=$|\s)")
+HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?(?=$|\s)")
 
 POWER_ICON_KEYS = {
     "power_shutdown": "shutdown_icon",
     "power_reboot": "reboot_icon",
     "power_firmware": "firmware_icon",
 }
+
+
+class TargetGenerationError(RuntimeError):
+    pass
 
 
 def warn(msg: str) -> None:
@@ -39,7 +43,8 @@ def fmt_value(v) -> str:
         return "1" if v else "0"
     s = str(v)
     if '"' in s:
-        warn(f"value contains a double quote: {s!r}")
+        warn(f"value contains a double quote (replacing with single quote): {s!r}")
+        s = s.replace('"', "'")
     if s == "" or re.search(r"\s", s):
         return f'"{s}"'
     return s
@@ -66,8 +71,9 @@ def _split_value_and_comment(rhs: str) -> tuple[str, str]:
 
     start_idx = 0
     if rhs.startswith("#"):
-        if HEX_COLOR_RE.match(rhs):
-            start_idx = 7
+        m_hex = HEX_COLOR_RE.match(rhs)
+        if m_hex:
+            start_idx = m_hex.end()
         else:
             return "", rhs
 
@@ -279,6 +285,14 @@ class Installer:
         self.arch = cfg["efiArch"]
         self.efi_name = f"visor_{self.arch}.efi"
         self.keep: set[str] = set()
+        self.managed_assets: set[str] = set()
+
+    def _track_asset(self, dst: Path) -> None:
+        try:
+            rel = dst.relative_to(self.visor_dir).as_posix()
+            self.managed_assets.add(rel)
+        except ValueError:
+            pass
 
     def deploy_binaries(self) -> None:
         pkg = self.cfg.get("package")
@@ -298,7 +312,9 @@ class Installer:
                 rel = Path(root).relative_to(assets)
                 for fname in files:
                     try:
-                        atomic_copy(Path(root) / fname, self.visor_dir / rel / fname)
+                        dst = self.visor_dir / rel / fname
+                        atomic_copy(Path(root) / fname, dst)
+                        self._track_asset(dst)
                     except OSError as e:
                         warn(f"asset {fname}: {e}")
 
@@ -312,8 +328,10 @@ class Installer:
             if not m or not m.get("src"):
                 return
             name = f"{stem}.{sanitize_ext(m.get('ext'))}"
+            dst = d / subdir / name if subdir else d / name
             try:
-                atomic_copy(m["src"], d / subdir / name if subdir else d / name)
+                atomic_copy(m["src"], dst)
+                self._track_asset(dst)
             except OSError as e:
                 warn(f"{key}: {e}")
                 return
@@ -333,7 +351,9 @@ class Installer:
         sound = a.get("menuSound")
         if sound:
             try:
-                atomic_copy(sound, d / "bootsound.wav")
+                dst = d / "bootsound.wav"
+                atomic_copy(sound, dst)
+                self._track_asset(dst)
                 ov["menu_sound"] = efi_path("EFI", "visor", "bootsound.wav")
             except OSError as e:
                 warn(f"menuSound: {e}")
@@ -342,8 +362,10 @@ class Installer:
             if not SAFE_NAME_RE.match(name):
                 warn(f"invalid icon name {name!r}, skipped")
                 continue
+            dst = d / "icons" / f"{name}.png"
             try:
-                atomic_copy(src, d / "icons" / f"{name}.png")
+                atomic_copy(src, dst)
+                self._track_asset(dst)
             except OSError as e:
                 warn(f"icon {name}: {e}")
                 continue
@@ -355,9 +377,11 @@ class Installer:
             if not SAFE_NAME_RE.match(name):
                 warn(f"invalid theme name {name!r}, skipped")
                 continue
+            dst = d / "themes" / f"{name}.conf"
             try:
                 text = Path(src).read_text(encoding="utf-8")
-                atomic_write(d / "themes" / f"{name}.conf", normalize_conf(text).encode())
+                atomic_write(dst, normalize_conf(text).encode())
+                self._track_asset(dst)
             except (OSError, UnicodeDecodeError) as e:
                 warn(f"theme {name}: {e}")
         if a.get("activeTheme"):
@@ -387,10 +411,31 @@ class Installer:
             if not rel.parts or ".." in rel.parts or rel == PurePosixPath("boot.conf"):
                 warn(f"extraFiles: unsafe relative path {rel_path!r}, skipped")
                 continue
+            dst = d.joinpath(*rel.parts)
             try:
-                atomic_copy(src, d.joinpath(*rel.parts))
+                atomic_copy(src, dst)
+                self._track_asset(dst)
             except OSError as e:
                 warn(f"extraFiles {rel_path}: {e}")
+
+        manifest = d / ".managed-assets.json"
+        if manifest.exists():
+            try:
+                prev = set(json.loads(manifest.read_text(encoding="utf-8")))
+            except (OSError, ValueError, TypeError):
+                prev = set()
+            for stale_rel in prev - self.managed_assets:
+                stale_path = d / PurePosixPath(stale_rel)
+                if stale_path.is_file():
+                    try:
+                        stale_path.unlink()
+                    except OSError as e:
+                        warn(f"failed to remove stale asset {stale_path}: {e}")
+        try:
+            atomic_write(manifest, json.dumps(sorted(self.managed_assets)).encode("utf-8"))
+        except OSError as e:
+            warn(f"failed to write asset manifest: {e}")
+
         return ov
 
     @staticmethod
@@ -424,9 +469,9 @@ class Installer:
             copy_to(src, tmp)
             r = subprocess.run([secrets, str(tmp)])
             if r.returncode != 0:
-                warn(f"append-initrd-secrets exited with code {r.returncode} for {name}; "
-                     "initrd will not contain secrets")
-                copy_to(src, tmp)
+                raise RuntimeError(
+                    f"append-initrd-secrets exited with code {r.returncode} for {name}"
+                )
             _fsync_path(tmp)
             os.replace(tmp, dst)
         finally:
@@ -441,10 +486,9 @@ class Installer:
         if gen["number"] is None:
             name = "NixOS (current)"
         else:
-            try:
-                name = self.cfg["entryName"].format(gen=gen["number"], date=date, label=spec["label"])
-            except (KeyError, IndexError):
-                name = f"NixOS #{gen['number']}"
+            name = self.cfg["entryName"]
+            for key, val in (("{gen}", gen["number"]), ("{date}", date), ("{label}", spec["label"])):
+                name = name.replace(key, str(val))
         if gen["profile"]:
             name = f"{gen['profile']}: {name}"
         if spec_name:
@@ -472,18 +516,26 @@ class Installer:
 
         entries = []
         for g in gens:
+            is_target = self.default_top is not None and g["path"] == self.default_top
             try:
                 base, specs = read_generation(g["path"])
-            except (OSError, KeyError, ValueError) as e:
+            except (OSError, KeyError, ValueError, RuntimeError) as e:
                 warn(f"{g['path']}: {e}, generation skipped")
+                if is_target:
+                    raise TargetGenerationError(f"failed to read target generation {g['path']}: {e}") from e
                 continue
             variants = [(None, lambda: base)]
             variants += [(n, (lambda raw=raw: spec_from_bootspec(raw))) for n, raw in specs.items()]
             for sname, get_spec in variants:
                 try:
                     entries.append(self.make_entry(g, sname, get_spec()))
-                except (OSError, KeyError, ValueError) as e:
+                except (OSError, KeyError, ValueError, RuntimeError) as e:
                     warn(f"{g['path']}{' [' + sname + ']' if sname else ''}: {e}, entry skipped")
+                    if is_target:
+                        raise TargetGenerationError(
+                            f"failed to install target generation {g['path']}"
+                            f"{' [' + sname + ']' if sname else ''}: {e}"
+                        ) from e
         return entries
 
     def render_conf(self, overrides: dict, entries) -> str:
@@ -570,7 +622,11 @@ class Installer:
 
         self.deploy_binaries()
         overrides = self.deploy_assets()
-        entries = self.build_entries()
+        try:
+            entries = self.build_entries()
+        except TargetGenerationError as e:
+            warn(f"{e}; leaving boot.conf untouched")
+            return 1
         if not entries:
             warn("no bootable NixOS entries found, leaving boot.conf untouched")
             return 1

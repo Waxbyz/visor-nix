@@ -22,7 +22,9 @@ let
     hardeningDisable = [ "all" ];
 
     postPatch = ''
-      patchShebangs tools/ visor install.sh
+      for p in tools visor install.sh; do
+        [ -e "$p" ] && patchShebangs "$p"
+      done
     '';
 
     makeFlags = [
@@ -61,7 +63,14 @@ let
     version = efifs-src.shortRev or "git";
     src = efifs-src;
 
-    nativeBuildInputs = [ pkgs.git pkgs.python3 ];
+    nativeBuildInputs = [
+      pkgs.git
+      pkgs.python3
+      pkgs.bison
+      pkgs.flex
+      pkgs.gettext
+    ];
+    buildInputs = [ pkgs.gnu-efi ];
     hardeningDisable = [ "all" ];
 
     postPatch = ''
@@ -458,6 +467,7 @@ in
     drivers = lib.mkOption {
       type = lib.types.listOf (lib.types.enum [
         "ext2"
+        "ext3"
         "ext4"
         "btrfs"
         "xfs"
