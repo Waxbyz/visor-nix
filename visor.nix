@@ -220,7 +220,8 @@ let
         sys.exit(0)
 
     rtc_epoch = int(rtc_epoch_file.read_text(encoding="utf-8").strip())
-    offset = int(round(time.time() - rtc_epoch))
+    tz_offset = ${if config.time.hardwareClockInLocalTime then "0" else "time.localtime().tm_gmtoff"}
+    offset = int(round(time.time() - rtc_epoch)) + tz_offset
     if abs(offset) >= 86400:
         sys.exit(0)
 
