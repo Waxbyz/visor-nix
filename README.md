@@ -1,3 +1,5 @@
+# Visor-nix
+
 `visor-nix` brings [Visor-BootManager](https://github.com/IO-ZetZor/Visor-BootManager) to NixOS as a flake module. It builds Visor (and optional EfiFs filesystem drivers) from source, reads NixOS Bootspec generations (`boot.json`, `specialisations`, `system-profiles`, and `initrdSecrets`), deploys kernels, initrds, themes, icons, and media atomically to the ESP, and garbage-collects stale boot files automatically during `nixos-rebuild switch`.
 
 ## Features
