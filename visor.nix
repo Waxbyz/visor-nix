@@ -90,10 +90,7 @@ let
     buildPhase = ''
       runHook preBuild
       ./set_grub_cpu.sh ${efiArch}
-      for fs in ${lib.concatStringsSep " " efifsNames}; do
-        make ARCH=${efiArch} "$fs" \
-          || make ARCH=${efiArch} -C src "$fs"
-      done
+      make ARCH=${efiArch}
       runHook postBuild
     '';
 
