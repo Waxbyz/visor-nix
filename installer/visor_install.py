@@ -549,9 +549,14 @@ class Installer:
         if (c.get("extraConfig") or "").strip():
             lines += ["", normalize_conf(c["extraConfig"]).rstrip("\n")]
         lines.append("")
+
+        nixos_prio = int((c.get("nixosEntry") or {}).get("priority", 0))
+        all_entries: list[tuple[int, int, dict, str | None]] = []
+        seq = 0
+
         for attrs, comment in entries:
-            lines += render_entry(attrs, comment)
-            lines.append("")
+            all_entries.append((nixos_prio, seq, attrs, comment))
+            seq += 1
 
         for extra in (c.get("extraEntries") or []):
             ea: dict = {"name": extra["name"]}
@@ -563,8 +568,9 @@ class Installer:
             if extra.get("cmdline"):
                 ea["cmdline"] = extra["cmdline"]
             apply_entry_opts(ea, extra)
-            lines += render_entry(ea)
-            lines.append("")
+            prio = int(extra.get("priority", 100))
+            all_entries.append((prio, seq, ea, None))
+            seq += 1
 
         win = self.esp / "EFI" / "Microsoft" / "Boot" / "bootmgfw.efi"
         if c.get("windowsChainload") and win.exists():
@@ -574,8 +580,15 @@ class Installer:
                 w["icon"] = efi_path("EFI", "visor", "icons", "windows.png")
             w["kernel"] = efi_path("EFI", "Microsoft", "Boot", "bootmgfw.efi")
             apply_entry_opts(w, win_opts, kernel_path=win)
-            lines += render_entry(w)
+            win_prio = int(win_opts.get("priority", 100))
+            all_entries.append((win_prio, seq, w, None))
+            seq += 1
+
+        all_entries.sort(key=lambda item: (item[0], item[1]))
+        for _, _, attrs, comment in all_entries:
+            lines += render_entry(attrs, comment)
             lines.append("")
+
         return "\n".join(lines)
 
     def collect_garbage(self) -> None:

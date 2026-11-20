@@ -63,6 +63,7 @@
     # theme = "catppuccin"; # active theme name, "random", or "cycle"
 
     nixosEntry = {
+      priority = 0;                        # menu order priority (lower appears first)
       color = "#7AA2F7";                   # per-entry label color (#RRGGBB or #RRGGBBAA)
       # iconSize = 128;                    # per-entry icon size in px
       # uuid = "xxxx-xxxx-...";            # pin ESP partition PARTUUID
@@ -76,6 +77,7 @@
     };
 
     windowsEntry = {
+      priority = 100;                      # set < 0 (e.g. -10) to place Windows before NixOS
       name = "Windows 11";
       # color = "#00A4EF";
       # iconSize = 128;
@@ -86,6 +88,7 @@
     # Custom boot entries (Windows on a separate ESP, other distros, UKIs, Memtest86+, etc.)
     extraEntries = [
       # {
+      #   priority = -10;                  # negative priority places this entry before NixOS (0)
       #   name = "Windows 11";
       #   icon = "\\EFI\\visor\\icons\\windows.png";
       #   kernel = "\\EFI\\Microsoft\\Boot\\bootmgfw.efi";

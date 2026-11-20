@@ -232,6 +232,12 @@ let
     PY
   '';
 
+  mkPriorityOption = default: lib.mkOption {
+    type = lib.types.int;
+    inherit default;
+    description = "Menu ordering priority (lower numbers appear first; NixOS defaults to 0, extra/Windows entries default to 100).";
+  };
+
   commonEntryOptions = {
     iconSize = lib.mkOption {
       type = lib.types.nullOr lib.types.ints.positive;
@@ -285,6 +291,7 @@ let
 
   extraEntryType = lib.types.submodule {
     options = commonEntryOptions // luksEntryOptions // {
+      priority = mkPriorityOption 100;
       name = lib.mkOption {
         type = lib.types.str;
         description = "Display name of the boot entry.";
@@ -370,6 +377,7 @@ in
       default = { };
       type = lib.types.submodule {
         options = commonEntryOptions // luksEntryOptions // {
+          priority = mkPriorityOption 0;
           pinSha256 = lib.mkOption {
             type = lib.types.bool;
             default = false;
@@ -384,6 +392,7 @@ in
       default = { };
       type = lib.types.submodule {
         options = commonEntryOptions // {
+          priority = mkPriorityOption 100;
           name = lib.mkOption {
             type = lib.types.str;
             default = "Windows 11";
