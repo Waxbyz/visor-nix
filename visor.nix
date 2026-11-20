@@ -234,8 +234,59 @@ let
     PY
   '';
 
+  commonEntryOptions = {
+    iconSize = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Optional per-entry icon size in pixels.";
+    };
+    color = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional per-entry name color (`#RRGGBB` or `#RRGGBBAA`).";
+    };
+    uuid = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional partition PARTUUID pinning where the boot image lives.";
+    };
+  };
+
+  luksEntryOptions = {
+    luks = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Prompt for a LUKS passphrase and inject it as an initrd keyfile.";
+    };
+    luksKeyPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Path of the injected keyfile inside initramfs (e.g. `/crypto_keyfile.bin`).";
+    };
+    luksPreset = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum [ "mkinitcpio" "arch" "dracut" "systemd" ]);
+      default = null;
+      description = "Initramfs preset for auto-generating the LUKS keyfile kernel option.";
+    };
+    luksCmdline = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Manual kernel command-line option for the LUKS keyfile (overrides `luksPreset`).";
+    };
+    luksConfirm = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Ask for the LUKS passphrase twice to prevent typos.";
+    };
+    luksVerbose = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Strip `quiet` and `splash` from cmdline so initramfs retry prompts remain visible.";
+    };
+  };
+
   extraEntryType = lib.types.submodule {
-    options = {
+    options = commonEntryOptions // luksEntryOptions // {
       name = lib.mkOption {
         type = lib.types.str;
         description = "Display name of the boot entry.";
@@ -259,21 +310,6 @@ let
         default = null;
         description = "Optional icon path (e.g. `\\EFI\\visor\\icons\\arch.png`).";
       };
-      iconSize = lib.mkOption {
-        type = lib.types.nullOr lib.types.ints.positive;
-        default = null;
-        description = "Optional per-entry icon size in pixels.";
-      };
-      color = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Optional per-entry name color (`#RRGGBB`).";
-      };
-      uuid = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Optional partition PARTUUID pinning where the kernel or image lives.";
-      };
       sha256 = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -293,36 +329,6 @@ let
         type = lib.types.nullOr lib.types.bool;
         default = null;
         description = "Override encryption flag for initrd only.";
-      };
-      luks = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Prompt for a LUKS passphrase and inject it as an initrd keyfile.";
-      };
-      luksKeyPath = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Path of the injected keyfile inside initramfs (e.g. `/crypto_keyfile.bin`).";
-      };
-      luksPreset = lib.mkOption {
-        type = lib.types.nullOr (lib.types.enum [ "mkinitcpio" "arch" "dracut" "systemd" ]);
-        default = null;
-        description = "Initramfs preset for auto-generating the LUKS keyfile kernel option.";
-      };
-      luksCmdline = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Manual kernel command-line option for the LUKS keyfile (overrides `luksPreset`).";
-      };
-      luksConfirm = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Ask for the LUKS passphrase twice to prevent typos.";
-      };
-      luksVerbose = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Strip `quiet` and `splash` from cmdline so initramfs retry prompts remain visible.";
       };
     };
   };
@@ -365,56 +371,11 @@ in
       description = "Optional per-entry attributes applied to generated NixOS boot entries.";
       default = { };
       type = lib.types.submodule {
-        options = {
-          iconSize = lib.mkOption {
-            type = lib.types.nullOr lib.types.ints.positive;
-            default = null;
-            description = "Override icon size in pixels for NixOS entries.";
-          };
-          color = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Override entry name color (`#RRGGBB`) for NixOS entries.";
-          };
-          uuid = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Optional partition PARTUUID pinning the ESP containing NixOS kernels.";
-          };
+        options = commonEntryOptions // luksEntryOptions // {
           pinSha256 = lib.mkOption {
             type = lib.types.bool;
             default = false;
             description = "Automatically compute and pin the SHA-256 hash of each deployed NixOS kernel.";
-          };
-          luks = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Prompt for a LUKS passphrase and inject it as an initrd keyfile.";
-          };
-          luksKeyPath = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Path of the injected keyfile inside initramfs.";
-          };
-          luksPreset = lib.mkOption {
-            type = lib.types.nullOr (lib.types.enum [ "mkinitcpio" "arch" "dracut" "systemd" ]);
-            default = null;
-            description = "Initramfs preset for auto-generating the LUKS keyfile kernel option.";
-          };
-          luksCmdline = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Manual kernel command-line option for the LUKS keyfile.";
-          };
-          luksConfirm = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Ask for the LUKS passphrase twice to prevent typos.";
-          };
-          luksVerbose = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = "Strip `quiet` and `splash` from cmdline so initramfs retry prompts remain visible.";
           };
         };
       };
@@ -424,26 +385,11 @@ in
       description = "Customization options for the auto-detected Windows Boot Manager entry.";
       default = { };
       type = lib.types.submodule {
-        options = {
+        options = commonEntryOptions // {
           name = lib.mkOption {
             type = lib.types.str;
             default = "Windows 11";
             description = "Display name for the Windows Boot Manager entry.";
-          };
-          iconSize = lib.mkOption {
-            type = lib.types.nullOr lib.types.ints.positive;
-            default = null;
-            description = "Override icon size in pixels for the Windows entry.";
-          };
-          color = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Override entry name color (`#RRGGBB`) for the Windows entry.";
-          };
-          uuid = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Optional partition PARTUUID pinning `bootmgfw.efi`.";
           };
           pinSha256 = lib.mkOption {
             type = lib.types.bool;
