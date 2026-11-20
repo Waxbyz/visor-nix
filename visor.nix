@@ -30,6 +30,10 @@ let
     makeFlags = [
       "ARCH=${cpu}"
       "PREFIX=${pkgs.gnu-efi}"
+      "GNU_EFI_INC=${pkgs.gnu-efi}/include/efi"
+      "GNU_EFI_LIB=${pkgs.gnu-efi}/lib"
+      "GNU_EFI_CRT0=${pkgs.gnu-efi}/lib/crt0-efi-${cpu}.o"
+      "GNU_EFI_LDS=${pkgs.gnu-efi}/lib/elf_${cpu}_efi.lds"
       "EFIINC=${pkgs.gnu-efi}/include/efi"
       "EFILIB=${pkgs.gnu-efi}/lib"
       "CRT0=${pkgs.gnu-efi}/lib/crt0-efi-${cpu}.o"
